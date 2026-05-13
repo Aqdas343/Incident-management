@@ -1,0 +1,140 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: incident_user
+      POSTGRES_PASSWORD: incident_pass
+      POSTGRES_DB: incident_platform
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - incident_net
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks:
+      - incident_net
+
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - '8000:8000'
+    environment:
+      - DATABASE_URL=postgresql://incident_user:incident_pass@postgres:5432/incident_platform
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4-turbo-preview}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_API_URL=${GROQ_API_URL}
+      - GROQ_MODEL=${GROQ_MODEL}
+      - DATADOG_API_KEY=${DATADOG_API_KEY}
+      - DATADOG_HOST=${DATADOG_HOST:-127.0.0.1}
+      - DATADOG_PORT=${DATADOG_PORT:-8125}
+      - DATADOG_METRIC_PREFIX=${DATADOG_METRIC_PREFIX:-incident_platform}
+      - SERVICE_NAME=${SERVICE_NAME:-incident-management-backend}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL}
+      - SMTP_URL=${SMTP_URL}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO}
+      - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM}
+      - DEFAULT_ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - incident_net
+
+  worker:
+    build:
+      context: ./backend
+    command: npm run worker
+    environment:
+      - DATABASE_URL=postgresql://incident_user:incident_pass@postgres:5432/incident_platform
+      - REDIS_URL=redis://redis:6379/0
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_ALGORITHM=${JWT_ALGORITHM:-HS256}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-60}
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-4-20250514}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4-turbo-preview}
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_API_URL=${GROQ_API_URL}
+      - GROQ_MODEL=${GROQ_MODEL}
+      - DATADOG_API_KEY=${DATADOG_API_KEY}
+      - DATADOG_HOST=${DATADOG_HOST:-127.0.0.1}
+      - DATADOG_PORT=${DATADOG_PORT:-8125}
+      - DATADOG_METRIC_PREFIX=${DATADOG_METRIC_PREFIX:-incident_platform}
+      - SERVICE_NAME=${SERVICE_NAME:-incident-management-backend}
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL}
+      - ALERT_WEBHOOK_URL=${ALERT_WEBHOOK_URL}
+      - SMTP_URL=${SMTP_URL}
+      - ALERT_EMAIL_TO=${ALERT_EMAIL_TO}
+      - ALERT_EMAIL_FROM=${ALERT_EMAIL_FROM}
+      - DEFAULT_ADMIN_EMAIL=${DEFAULT_ADMIN_EMAIL}
+      - DEFAULT_ADMIN_PASSWORD=${DEFAULT_ADMIN_PASSWORD}
+    depends_on:
+      - backend
+      - redis
+      - postgres
+    networks:
+      - incident_net
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - '9090:9090'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - backend
+    networks:
+      - incident_net
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - '3000:3000'
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - incident_net
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - '5173:5173'
+    environment:
+      - VITE_API_URL=http://localhost:8000
+    depends_on:
+      - backend
+    networks:
+      - incident_net
+
+volumes:
+  postgres_data:
+  grafana_data:
+
+networks:
+  incident_net:
+    driver: bridge
