@@ -1,44 +1,51 @@
 export class WebSocketManager {
-  constructor() {
-    this.activeConnections = new Map();
-  }
+  /** @type {Map<string, Set<object>>} */
+  #connections = new Map();
 
   connect(userId, socket) {
-    const connections = this.activeConnections.get(userId) || [];
-    connections.push(socket);
-    this.activeConnections.set(userId, connections);
-
+    if (!this.#connections.has(userId)) {
+      this.#connections.set(userId, new Set());
+    }
+    this.#connections.get(userId).add(socket);
     socket.on('disconnect', () => this.disconnect(userId, socket));
   }
 
   disconnect(userId, socket) {
-    const connections = this.activeConnections.get(userId) || [];
-    this.activeConnections.set(userId, connections.filter((s) => s !== socket));
+    const sockets = this.#connections.get(userId);
+    if (!sockets) return;
+    sockets.delete(socket);
+    if (sockets.size === 0) this.#connections.delete(userId);
   }
 
-  _send(socket, eventType, data) {
+  getActiveUserIds() {
+    return [...this.#connections.keys()];
+  }
+
+  getActiveUserCount() {
+    return this.#connections.size;
+  }
+
+  #send(socket, eventType, data) {
     if (typeof socket.emit === 'function') {
       socket.emit(eventType, data);
-      return;
-    }
-
-    if (typeof socket.send === 'function') {
+    } else if (typeof socket.send === 'function') {
       socket.send(JSON.stringify({ event: eventType, data }));
     }
   }
 
   broadcast(eventType, data) {
-    for (const connections of this.activeConnections.values()) {
-      for (const socket of connections) {
-        this._send(socket, eventType, data);
+    for (const sockets of this.#connections.values()) {
+      for (const socket of sockets) {
+        this.#send(socket, eventType, data);
       }
     }
   }
 
   sendToUser(userId, eventType, data) {
-    const connections = this.activeConnections.get(userId) || [];
-    for (const socket of connections) {
-      this._send(socket, eventType, data);
+    const sockets = this.#connections.get(userId);
+    if (!sockets) return;
+    for (const socket of sockets) {
+      this.#send(socket, eventType, data);
     }
   }
 }

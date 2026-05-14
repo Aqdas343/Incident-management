@@ -2,19 +2,17 @@ import nodemailer from 'nodemailer';
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
-const transporter = config.smtpUrl
-  ? nodemailer.createTransport(config.smtpUrl)
-  : null;
+const transporter = config.smtpUrl ? nodemailer.createTransport(config.smtpUrl) : null;
 
 async function sendSlackAlert(message) {
   if (!config.slackWebhookUrl) return false;
   try {
-    const response = await fetch(config.slackWebhookUrl, {
-      method: 'POST',
+    const res = await fetch(config.slackWebhookUrl, {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: message }),
+      body:    JSON.stringify({ text: message }),
     });
-    return response.ok;
+    return res.ok;
   } catch (error) {
     logger.error('alert.slack.failed', { error: error.message });
     return false;
@@ -24,12 +22,12 @@ async function sendSlackAlert(message) {
 async function sendWebhookAlert(payload) {
   if (!config.alertWebhookUrl) return false;
   try {
-    const response = await fetch(config.alertWebhookUrl, {
-      method: 'POST',
+    const res = await fetch(config.alertWebhookUrl, {
+      method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
+      body:    JSON.stringify(payload),
     });
-    return response.ok;
+    return res.ok;
   } catch (error) {
     logger.error('alert.webhook.failed', { error: error.message });
     return false;
@@ -39,12 +37,7 @@ async function sendWebhookAlert(payload) {
 async function sendEmailAlert(subject, text) {
   if (!transporter || !config.alertEmailTo || !config.alertEmailFrom) return false;
   try {
-    await transporter.sendMail({
-      from: config.alertEmailFrom,
-      to: config.alertEmailTo,
-      subject,
-      text,
-    });
+    await transporter.sendMail({ from: config.alertEmailFrom, to: config.alertEmailTo, subject, text });
     return true;
   } catch (error) {
     logger.error('alert.email.failed', { error: error.message });
@@ -54,19 +47,20 @@ async function sendEmailAlert(subject, text) {
 
 export async function sendIncidentAlert(incident) {
   const subject = `New incident created: ${incident.service}`;
-  const body = `Incident ID: ${incident.id}\nService: ${incident.service}\nTitle: ${incident.title}\nSource: ${incident.source}\nStatus: ${incident.status}`;
+  const body    = [
+    `Incident ID: ${incident.id}`,
+    `Service:     ${incident.service}`,
+    `Title:       ${incident.title}`,
+    `Source:      ${incident.source}`,
+    `Status:      ${incident.status}`,
+  ].join('\n');
 
-  const results = await Promise.all([
+  const [slack, webhook, email] = await Promise.all([
     sendSlackAlert(`:rotating_light: ${subject}\n${body}`),
     sendWebhookAlert({ type: 'incident_alert', incident }),
     sendEmailAlert(subject, body),
   ]);
 
-  logger.info('alert.sent', {
-    incidentId: incident.id,
-    slack: results[0],
-    webhook: results[1],
-    email: results[2],
-  });
-  return results.some(Boolean);
+  logger.info('alert.sent', { incidentId: incident.id, slack, webhook, email });
+  return slack || webhook || email;
 }

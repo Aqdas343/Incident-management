@@ -2,10 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from './config.js';
 import { logger } from './utils/logger.js';
 
-if (!config.supabaseUrl || !config.supabaseServiceRoleKey) {
-  throw new Error('SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set.');
-}
-
+// Resolve optional ws transport for Node < 22
 let wsTransport;
 const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
 if (nodeMajor < 22) {
@@ -18,13 +15,25 @@ if (nodeMajor < 22) {
 }
 
 const supabaseOptions = wsTransport ? { realtime: { transport: wsTransport } } : {};
-export const supabase = createClient(config.supabaseUrl, config.supabaseServiceRoleKey, supabaseOptions);
+
+// Export null when config is missing so the process doesn't crash at import
+// time — initDb() will catch the missing config and exit with a clear message.
+export const supabase = (config.supabaseUrl && config.supabaseServiceRoleKey)
+  ? createClient(config.supabaseUrl, config.supabaseServiceRoleKey, supabaseOptions)
+  : null;
 
 export async function initDb() {
+  if (!config.supabaseUrl || !config.supabaseServiceRoleKey) {
+    logger.error('db.init.missing_config', {
+      message: 'SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY must be set.',
+    });
+    process.exit(1);
+  }
+
   const { error } = await supabase.from('users').select('id').limit(1);
   if (error) {
     logger.warn('db.init.warning', {
-      message: 'Supabase is reachable but expected tables may not exist yet.',
+      message: 'Supabase reachable but expected tables may not exist yet.',
       error: error.message,
     });
   }

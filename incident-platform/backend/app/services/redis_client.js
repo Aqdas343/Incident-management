@@ -16,15 +16,15 @@ export async function initRedis() {
   }
 
   const probe = new Redis(config.redisUrl, {
-    lazyConnect: true,
-    connectTimeout: 2000,
+    lazyConnect:          true,
+    connectTimeout:       2000,
     maxRetriesPerRequest: 0,
-    retryStrategy: null,
-    enableOfflineQueue: false,
+    retryStrategy:        null,
+    enableOfflineQueue:   false,
   });
 
   probe.on('error', (error) => {
-    logger.warn('redis.probe.error', { error: error?.message || String(error), url: config.redisUrl });
+    logger.warn('redis.probe.error', { error: error?.message || String(error) });
   });
 
   try {
@@ -35,7 +35,7 @@ export async function initRedis() {
     logger.info('redis.available', { url: config.redisUrl });
     return true;
   } catch (error) {
-    logger.warn('redis.unavailable', { error: error?.message || String(error), url: config.redisUrl });
+    logger.warn('redis.unavailable', { error: error?.message || String(error) });
     redisAvailable = false;
     try { await probe.disconnect(); } catch { /* ignore */ }
     return false;

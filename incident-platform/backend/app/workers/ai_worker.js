@@ -5,20 +5,26 @@ import { queueEscalationTimeouts } from './queue.js';
 import { logger } from '../utils/logger.js';
 
 export async function processIncidentAi(incidentId) {
+  const incident = await getIncidentById(incidentId);
+  if (!incident) {
+    logger.error('ai.worker.incident_not_found', { incidentId });
+    return;
+  }
+
   try {
-    const incident = await getIncidentById(incidentId);
-    if (!incident) {
-      logger.error('ai.worker.incident_not_found', { incidentId });
-      return;
-    }
     const classification = await classifyIncident({
-      service: incident.service,
-      message: incident.title,
+      service:   incident.service,
+      message:   incident.title,
       timestamp: incident.raw_payload?.timestamp || incident.created_at,
     });
+
     const updated = await updateIncidentAiData(incidentId, classification);
-    await publishEvent('incident.classified', { incidentId, classification, incident: updated });
-    await queueEscalationTimeouts(incidentId);
+
+    await Promise.all([
+      publishEvent('incident.classified', { incidentId, classification, incident: updated }),
+      queueEscalationTimeouts(incidentId),
+    ]);
+
     return classification;
   } catch (error) {
     logger.error('ai.worker.failed', { incidentId, error: error.message });

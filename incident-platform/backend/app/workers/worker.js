@@ -1,26 +1,45 @@
 import { Worker } from 'bullmq';
 import Redis from 'ioredis';
 import { config } from '../config.js';
-import { processIncidentAi } from './ai_worker.js';
-import { checkEscalationRules, escalateIfUnresolved } from './escalation_worker.js';
 import { logger } from '../utils/logger.js';
 import { initRedis, isRedisAvailable } from '../services/redis_client.js';
+import { processIncidentAi } from './ai_worker.js';
+import { checkEscalationRules, escalateIfUnresolved } from './escalation_worker.js';
 import { queueDeadLetterMessage } from './queue.js';
 import { createDeadLetterMessage } from '../models/incident.js';
 
 await initRedis();
 
 if (!isRedisAvailable()) {
-  logger.warn('worker.redis.disabled', { reason: 'Redis unavailable, workers will not start' });
+  logger.warn('worker.redis.disabled', { reason: 'Redis unavailable — workers will not start' });
   process.exit(0);
 }
 
-const connection = {
-  connection: {
-    url: config.redisUrl,
-    maxRetriesPerRequest: null,
-  },
-};
+// BullMQ requires a proper ioredis instance, not a plain { url } object
+function makeConnection() {
+  return new Redis(config.redisUrl, { maxRetriesPerRequest: null, enableOfflineQueue: true });
+}
+
+function onWorkerError(name, error) {
+  logger.warn(`${name}.error`, { error: error?.message || String(error) });
+}
+
+async function onWorkerFailed(name, job, err) {
+  logger.warn(`${name}.job_failed`, {
+    jobId:        job.id,
+    name:         job.name,
+    attemptsMade: job.attemptsMade,
+    failedReason: err?.message || String(err),
+  });
+  if (job.attemptsMade >= (job.opts?.attempts || 1)) {
+    await queueDeadLetterMessage({
+      queue:   name,
+      jobName: job.name,
+      payload: job.data,
+      error:   err?.message || String(err),
+    });
+  }
+}
 
 const aiWorker = new Worker(
   'ai_queue',
@@ -29,27 +48,10 @@ const aiWorker = new Worker(
       return processIncidentAi(job.data.incidentId);
     }
   },
-  connection,
+  { connection: makeConnection() },
 );
-aiWorker.on('error', (error) => {
-  logger.warn('aiWorker.redis.error', { error: error?.message || String(error) });
-});
-aiWorker.on('failed', async (job, err) => {
-  logger.warn('aiWorker.job_failed', {
-    jobId: job.id,
-    name: job.name,
-    attemptsMade: job.attemptsMade,
-    failedReason: err?.message || String(err),
-  });
-  if (job.attemptsMade >= (job.opts?.attempts || 1)) {
-    await queueDeadLetterMessage({
-      queue: 'ai_queue',
-      jobName: job.name,
-      payload: job.data,
-      error: err?.message || String(err),
-    });
-  }
-});
+aiWorker.on('error',  (err)        => onWorkerError('aiWorker', err));
+aiWorker.on('failed', (job, err)   => onWorkerFailed('ai_queue', job, err));
 
 const escalationWorker = new Worker(
   'escalation_queue',
@@ -61,81 +63,41 @@ const escalationWorker = new Worker(
       return escalateIfUnresolved(job.data.incidentId, job.data.targetLevel);
     }
   },
-  connection,
+  { connection: makeConnection() },
 );
-escalationWorker.on('error', (error) => {
-  logger.warn('escalationWorker.redis.error', { error: error?.message || String(error) });
-});
-escalationWorker.on('failed', async (job, err) => {
-  logger.warn('escalationWorker.job_failed', {
-    jobId: job.id,
-    name: job.name,
-    attemptsMade: job.attemptsMade,
-    failedReason: err?.message || String(err),
-  });
-  if (job.attemptsMade >= (job.opts?.attempts || 1)) {
-    await queueDeadLetterMessage({
-      queue: 'escalation_queue',
-      jobName: job.name,
-      payload: job.data,
-      error: err?.message || String(err),
-    });
-  }
-});
+escalationWorker.on('error',  (err)      => onWorkerError('escalationWorker', err));
+escalationWorker.on('failed', (job, err) => onWorkerFailed('escalation_queue', job, err));
 
 const deadLetterWorker = new Worker(
   'dead_letter_queue',
   async (job) => {
     await createDeadLetterMessage({
-      queue: job.data.queue,
+      queue:   job.data.queue,
       jobName: job.data.jobName,
       payload: job.data.payload,
-      error: job.data.error,
+      error:   job.data.error,
     });
   },
-  connection,
+  { connection: makeConnection() },
 );
 deadLetterWorker.on('completed', (job) => {
   logger.info('dead_letter.processed', { jobId: job.id, queue: job.data.queue, jobName: job.data.jobName });
 });
-deadLetterWorker.on('error', (error) => {
-  logger.warn('deadLetterWorker.redis.error', { error: error?.message || String(error) });
-});
+deadLetterWorker.on('error', (err) => onWorkerError('deadLetterWorker', err));
 
-const heartbeatClient = new Redis(config.redisUrl, {
-  maxRetriesPerRequest: null,
-  enableOfflineQueue: false,
-});
-
-function heartbeat(key) {
-  heartbeatClient.set(key, Date.now().toString(), 'EX', 30).catch((error) => {
-    logger.warn('worker.heartbeat.failed', { key, error: error?.message || String(error) });
-  });
-}
-
-heartbeat('worker:ai:heartbeat');
-heartbeat('worker:escalation:heartbeat');
-heartbeat('worker:deadletter:heartbeat');
-
-const heartbeatIntervals = [
-  setInterval(() => heartbeat('worker:ai:heartbeat'), 15000),
-  setInterval(() => heartbeat('worker:escalation:heartbeat'), 15000),
-  setInterval(() => heartbeat('worker:deadletter:heartbeat'), 15000),
-];
 
 async function shutdown() {
-  logger.info('worker.shutdown', { reason: 'process exit' });
-  heartbeatIntervals.forEach(clearInterval);
-  try {
-    await heartbeatClient.disconnect();
-  } catch (error) {
-    logger.warn('worker.heartbeat.disconnect_failed', { error: error?.message || String(error) });
-  }
+  logger.info('worker.shutdown');
+  await Promise.allSettled([
+    aiWorker.close(),
+    escalationWorker.close(),
+    deadLetterWorker.close(),
+  ]);
   process.exit(0);
 }
 
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+process.on('SIGINT',     shutdown);
+process.on('SIGTERM',    shutdown);
 process.on('beforeExit', shutdown);
 
 logger.info('worker.started');

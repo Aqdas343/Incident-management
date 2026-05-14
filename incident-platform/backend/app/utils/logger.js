@@ -1,5 +1,8 @@
+const formatLog = (level, event, meta) =>
+  JSON.stringify({ level, event, ...meta, timestamp: new Date().toISOString() });
+
 export const logger = {
-  info: (message, meta = {}) => console.log(JSON.stringify({ level: 'info', event: message, ...meta, timestamp: new Date().toISOString() })),
-  warn: (message, meta = {}) => console.log(JSON.stringify({ level: 'warn', event: message, ...meta, timestamp: new Date().toISOString() })),
-  error: (message, meta = {}) => console.error(JSON.stringify({ level: 'error', event: message, ...meta, timestamp: new Date().toISOString() })),
+  info:  (event, meta = {}) => console.log(formatLog('info', event, meta)),
+  warn:  (event, meta = {}) => console.warn(formatLog('warn', event, meta)),
+  error: (event, meta = {}) => console.error(formatLog('error', event, meta)),
 };
